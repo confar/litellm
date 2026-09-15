@@ -42,9 +42,11 @@ export async function readDashboardSession(page: Page): Promise<{
 }
 
 export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
+  const virtualKeys = page.getByRole("complementary").getByRole("link", { name: "Virtual Keys", exact: true });
+  await expect(virtualKeys).toBeVisible({ timeout: 30_000 });
   const session = await readDashboardSession(page);
   expect(session.password_reset_required === true, "login must not require a password reset").toBe(false);
-  await page.goto(endpoint("/ui/api-keys/"));
+  await virtualKeys.click();
   await expect(page.getByRole("main").getByRole("heading", { name: "Virtual Keys", exact: true })).toBeVisible({
     timeout: 30_000,
   });
