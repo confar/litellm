@@ -289,14 +289,17 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
+    const startsLlmRubric =
+      !value.classifier_llm_config ||
+      (isForecastClassifier(value.classifier_type) && !isForecastClassifier(classifierType));
+    const judgeConfig = value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS };
     const nextValue: ComplexityRouterConfigValue = {
       ...value,
       classifier_type: classifierType,
       classifier_llm_config: usesLlmClassifier(classifierType)
-        ? value.classifier_llm_config ?? {
-            model: "",
-            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
+        ? {
+            ...judgeConfig,
+            ...(startsLlmRubric && { classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC }),
           }
         : undefined,
       classifier_context_window_size: usesLlmClassifier(classifierType)
