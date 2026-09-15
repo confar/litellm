@@ -1,8 +1,10 @@
+import PlanModeOverrideControls from "./PlanModeOverrideControls";
+import { ForecastSolverModels } from "./ForecastClassifierConfig";
+import { isForecastClassifier, type CapabilitySettings, type FuseSettings } from "./forecast_classifier_config";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
 
 import { AffinityControls } from "./AffinityControls";
 import NonReasoningTierToggle from "./NonReasoningTierToggle";
@@ -375,6 +377,8 @@ export interface ComplexityRouterConfigValue {
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
   classifier_type: ClassifierType;
+  capability_classifier_config?: CapabilitySettings;
+  llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
@@ -534,44 +538,6 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
-const PlanModeOverrideControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-  planModeTierOptions: { value: string; label: string }[];
-}> = ({ value, onChange, planModeTierOptions }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.plan_mode_min_tier !== undefined}
-        disabled={planModeTierOptions.length === 0}
-        onCheckedChange={(enabled) =>
-          onChange({
-            ...value,
-            plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
-          })
-        }
-        aria-label="Route plan-mode requests to a minimum tier"
-      />
-      <strong className="font-semibold">Route plan-mode requests to a minimum tier</strong>
-    </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
-      Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier. The classifier
-      still wins when it picks higher, and the override only lasts while plan mode is active.
-      {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
-    </span>
-    {value.plan_mode_min_tier !== undefined && (
-      <div style={{ maxWidth: 320 }}>
-        <TierRowSelect
-          label="Plan-mode minimum tier"
-          options={planModeTierOptions}
-          value={value.plan_mode_min_tier ?? null}
-          onValueChange={(tier) => onChange({ ...value, plan_mode_min_tier: tier })}
-        />
-      </div>
-    )}
-  </>
-);
-
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -660,138 +626,151 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </SimpleTooltip>
       </div>
 
-      <TierConfigIntro value={value} />
+      {isForecastClassifier(value.classifier_type) ? (
+        <ForecastSolverModels
+          value={value}
+          onChange={onChange}
+          modelOptions={modelOptions}
+          effortOptionsByModel={tierEffortOptionsByModel}
+        />
+      ) : (
+        <>
+          <TierConfigIntro value={value} />
 
-      <Card>
-        <CardContent>
-          {!customTierSet && (
-            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
-          )}
+          <Card>
+            <CardContent>
+              {!customTierSet && (
+                <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+              )}
 
-          {tierRows.map((row, index) => {
-            const tierInfo = builtInTierInfo(row.id);
-            const label = tierRowLabel(row, value.tier_labels);
-            const tierMissing = showValidationErrors && row.models.length === 0;
-            const needsDefinition = Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
-            const definitionMissing = showValidationErrors && needsDefinition;
-            const showsDisplayName = !customTierSet && !editingTiers;
-            return (
-              <div key={row.id}>
-                {index > 0 && <Separator className="my-4" />}
-                <div className="mb-4">
-                  <TierRowHeader
-                    row={row}
-                    index={index}
-                    rowCount={tierRows.length}
-                    label={label}
-                    description={tierInfo?.description}
-                    editing={editingTiers}
-                    isCustomSet={Boolean(customTierSet)}
-                    onRemove={() => removeTierRow(row.id)}
-                  />
-                  {tierInfo && !customTierSet && (
-                    <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
-                  )}
-                  {editingTiers && (
-                    <TierRowEditFields
-                      row={row}
-                      index={index}
-                      definitionMissing={definitionMissing}
-                      onPatch={(patch) => updateTierRow(row.id, patch)}
-                    />
-                  )}
-                  {showsDisplayName && tierInfo && (
-                    <InputGroup className="mb-2">
-                      <InputGroupInput
-                        value={value.tier_labels?.[row.id as keyof ComplexityTiers] ?? ""}
-                        onChange={(event) => handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)}
-                        placeholder={`Display name (default: ${tierInfo.label})`}
-                        aria-label={`Display name for the ${tierInfo.label} tier`}
+              {tierRows.map((row, index) => {
+                const tierInfo = builtInTierInfo(row.id);
+                const label = tierRowLabel(row, value.tier_labels);
+                const tierMissing = showValidationErrors && row.models.length === 0;
+                const needsDefinition =
+                  Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
+                const definitionMissing = showValidationErrors && needsDefinition;
+                const showsDisplayName = !customTierSet && !editingTiers;
+                return (
+                  <div key={row.id}>
+                    {index > 0 && <Separator className="my-4" />}
+                    <div className="mb-4">
+                      <TierRowHeader
+                        row={row}
+                        index={index}
+                        rowCount={tierRows.length}
+                        label={label}
+                        description={tierInfo?.description}
+                        editing={editingTiers}
+                        isCustomSet={Boolean(customTierSet)}
+                        onRemove={() => removeTierRow(row.id)}
                       />
-                      {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
-                        <InputGroupAddon align="inline-end">
-                          <InputGroupButton
-                            size="icon-xs"
-                            aria-label={`Clear display name for the ${tierInfo.label} tier`}
-                            onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
-                          >
-                            <X />
-                          </InputGroupButton>
-                        </InputGroupAddon>
+                      {tierInfo && !customTierSet && (
+                        <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
                       )}
-                    </InputGroup>
-                  )}
-                  <MultiSelect
-                    options={modelOptions}
-                    value={row.models}
-                    onValueChange={(models: string[]) => setRowModels(row, models)}
-                    placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
-                    emptyText="No models found"
-                    className={tierMissing ? "w-full border-destructive" : "w-full"}
-                  />
-                  <TierModelEffortRows
-                    tierLabel={label}
-                    models={row.models}
-                    effortOptionsByModel={tierEffortOptionsByModel}
-                    paramsByModel={row.params}
-                    onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
-                  />
-                  {row.models.length > 1 && (
-                    <span className="text-xs text-muted-foreground">
-                      Multiple models selected: the router randomly picks among them per request (or Thompson-samples
-                      within the pool when adaptive routing is on).
-                    </span>
-                  )}
-                  {tierMissing && <span className="text-xs text-destructive">The {label} tier is required</span>}
+                      {editingTiers && (
+                        <TierRowEditFields
+                          row={row}
+                          index={index}
+                          definitionMissing={definitionMissing}
+                          onPatch={(patch) => updateTierRow(row.id, patch)}
+                        />
+                      )}
+                      {showsDisplayName && tierInfo && (
+                        <InputGroup className="mb-2">
+                          <InputGroupInput
+                            value={value.tier_labels?.[row.id as keyof ComplexityTiers] ?? ""}
+                            onChange={(event) =>
+                              handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)
+                            }
+                            placeholder={`Display name (default: ${tierInfo.label})`}
+                            aria-label={`Display name for the ${tierInfo.label} tier`}
+                          />
+                          {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupButton
+                                size="icon-xs"
+                                aria-label={`Clear display name for the ${tierInfo.label} tier`}
+                                onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
+                              >
+                                <X />
+                              </InputGroupButton>
+                            </InputGroupAddon>
+                          )}
+                        </InputGroup>
+                      )}
+                      <MultiSelect
+                        options={modelOptions}
+                        value={row.models}
+                        onValueChange={(models: string[]) => setRowModels(row, models)}
+                        placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
+                        emptyText="No models found"
+                        className={tierMissing ? "w-full border-destructive" : "w-full"}
+                      />
+                      <TierModelEffortRows
+                        tierLabel={label}
+                        models={row.models}
+                        effortOptionsByModel={tierEffortOptionsByModel}
+                        paramsByModel={row.params}
+                        onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
+                      />
+                      {row.models.length > 1 && (
+                        <span className="text-xs text-muted-foreground">
+                          Multiple models selected: the router randomly picks among them per request (or
+                          Thompson-samples within the pool when adaptive routing is on).
+                        </span>
+                      )}
+                      {tierMissing && <span className="text-xs text-destructive">The {label} tier is required</span>}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <TierSetToolbar
+                editing={editingTiers}
+                isCustomSet={Boolean(customTierSet)}
+                rowCount={tierRows.length}
+                rowsError={tierRowsError}
+                keywordRulesError={keywordRulesError}
+                onEditingChange={onEditingTiersChange}
+                onAdd={addCustomTier}
+                onRestore={exitToBuiltInTiers}
+              />
+
+              {customTierSet && (
+                <FallbackTierField
+                  rows={tierRows}
+                  fallbackTierId={customTierSet.fallback_tier_id}
+                  onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
+                />
+              )}
+
+              <Separator className="my-4" />
+
+              <div className="mb-2">
+                <div className="flex items-center gap-2 mb-2">
+                  <strong className="text-base font-semibold">Default Model</strong>
+                  <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+                    <Info className="size-4 text-muted-foreground" />
+                  </SimpleTooltip>
                 </div>
+                <SearchSelect
+                  options={modelOptions}
+                  value={value.default_model ?? ""}
+                  onValueChange={handleDefaultModelChange}
+                  placeholder={defaultModelPlaceholder}
+                  emptyText="No models found"
+                  aria-label="Default model"
+                />
+                <span className="block mt-1 text-xs text-muted-foreground">
+                  Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route
+                  to the default model&quot; selected.
+                </span>
               </div>
-            );
-          })}
-
-          <TierSetToolbar
-            editing={editingTiers}
-            isCustomSet={Boolean(customTierSet)}
-            rowCount={tierRows.length}
-            rowsError={tierRowsError}
-            keywordRulesError={keywordRulesError}
-            onEditingChange={onEditingTiersChange}
-            onAdd={addCustomTier}
-            onRestore={exitToBuiltInTiers}
-          />
-
-          {customTierSet && (
-            <FallbackTierField
-              rows={tierRows}
-              fallbackTierId={customTierSet.fallback_tier_id}
-              onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
-            />
-          )}
-
-          <Separator className="my-4" />
-
-          <div className="mb-2">
-            <div className="flex items-center gap-2 mb-2">
-              <strong className="text-base font-semibold">Default Model</strong>
-              <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-muted-foreground" />
-              </SimpleTooltip>
-            </div>
-            <SearchSelect
-              options={modelOptions}
-              value={value.default_model ?? ""}
-              onValueChange={handleDefaultModelChange}
-              placeholder={defaultModelPlaceholder}
-              emptyText="No models found"
-              aria-label="Default model"
-            />
-            <span className="block mt-1 text-xs text-muted-foreground">
-              Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route to
-              the default model&quot; selected.
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-
+            </CardContent>
+          </Card>
+        </>
+      )}
       <Separator className="my-6" />
 
       <div className="rounded-lg border border-border bg-muted">

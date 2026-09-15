@@ -1,3 +1,5 @@
+import ForecastClassifierConfig from "./ForecastClassifierConfig";
+import { isForecastClassifier, prepareForecastClassifier } from "./forecast_classifier_config";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -210,6 +212,30 @@ const ClassifierTypeRadios: React.FC<{
             <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
           </span>
         </Label>
+        {(
+          [
+            {
+              value: "capability",
+              label: "Capability",
+              description: "forecasts whole-task success for the efficient solver",
+            },
+            {
+              value: "llm_v2",
+              label: "Fuse v2",
+              description: "compares success forecasts for efficient and capable solvers",
+            },
+          ] as const
+        ).map((option) => (
+          <SimpleTooltip key={option.value} content={scorerLockedReason}>
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value={option.value} className="mt-0.5" disabled={scorerLocked} />
+              <span>
+                <strong className="font-semibold">{option.label}</strong>{" "}
+                <span className="text-muted-foreground">{option.description}</span>
+              </span>
+            </Label>
+          </SimpleTooltip>
+        ))}
         <SimpleTooltip content={scorerLockedReason}>
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
@@ -291,7 +317,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
       ...nonReasoningTierFields(classifierType, value),
     };
-    onChange(nextValue);
+    onChange(prepareForecastClassifier(nextValue));
   };
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
@@ -433,24 +459,17 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  if (classifierType === "capability") {
+  if (isForecastClassifier(classifierType)) {
     return (
-      <p className="text-sm text-muted-foreground">
-        This router uses capability forecasting. Configure its classifier, threshold, and calibration through YAML or
-        the API. Saving preserves those settings
-      </p>
-    );
-  }
-
-  if (classifierType === "llm_v2") {
-    return (
-      <div className="rounded-md border p-4 text-sm">
-        <strong>LLM V2 classifier (experimental)</strong>
-        <p className="mt-2 text-muted-foreground">
-          Combines task demands and model capability in one forecast. Its solver profiles and quality allowance are
-          configured through the API. Saving this router preserves those settings
-        </p>
-      </div>
+      <>
+        <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
+        <ForecastClassifierConfig
+          value={value}
+          onChange={onChange}
+          modelOptions={modelOptions}
+          effortOptionsByModel={effortOptionsByModel}
+        />
+      </>
     );
   }
 

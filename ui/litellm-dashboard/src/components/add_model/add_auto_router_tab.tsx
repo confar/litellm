@@ -1,3 +1,4 @@
+import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
@@ -138,7 +139,9 @@ export const getSubmitBlockedReason = (
     (config.custom_tier_set
       ? getCustomTierRowsError(config.custom_tier_set)
       : getTierLabelsError(config.tier_labels)) ??
-    getMissingTiersError(activeTierRows(config)) ??
+    (isForecastClassifier(config.classifier_type)
+      ? getForecastConfigError(config)
+      : getMissingTiersError(activeTierRows(config))) ??
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
@@ -401,6 +404,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
+    capabilityClassifierConfig: complexityRouterConfig.capability_classifier_config,
+    llmV2Config: complexityRouterConfig.llm_v2_config,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
     classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
