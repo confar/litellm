@@ -2232,6 +2232,143 @@ def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata,
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
 
 
+class _KeyScopedMCPGuardrail(CustomGuardrail):
+    """Masking guardrail attached to a key or policy, never on globally, that writes request metadata like Presidio."""
+
+    def __init__(self, guardrail_name="mcp-output-guardrail"):
+        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        request_data["metadata"]["pii_tokens"] = {"<EMAIL_ADDRESS_1>": "jane@example.com"}
+        return {"texts": ["<MASKED>" for _ in inputs.get("texts", [])]}
+
+
+async def _post_mcp_call_texts(request_data, key_metadata):
+    from mcp.types import CallToolResult, TextContent
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        returned = await ProxyLogging(user_api_key_cache=DualCache()).post_mcp_call_hook(
+            response=CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False),
+            request_data=request_data,
+            user_api_key_dict=None if key_metadata is None else UserAPIKeyAuth(metadata=key_metadata),
+        )
+    return [item.text for item in returned.content]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, key_metadata, masked",
+    [
+        pytest.param(
+            {"litellm_params": {"metadata": {}}},
+            {"guardrails": ["mcp-output-guardrail"]},
+            True,
+            id="attached-to-key",
+        ),
+        pytest.param(
+            {"litellm_params": {"metadata": {"guardrails": ["mcp-output-guardrail"]}}},
+            None,
+            True,
+            id="resolved-on-the-way-in",
+        ),
+        pytest.param(
+            {"litellm_params": {"metadata": {"guardrails": ["mcp-output-guardrail"]}}},
+            {"guardrails": ["other-guardrail"]},
+            True,
+            id="resolved-list-beats-auth",
+        ),
+        pytest.param(
+            {
+                "metadata": {"user_id": "some-caller"},
+                "litellm_params": {"metadata": {"guardrails": ["mcp-output-guardrail"]}},
+            },
+            None,
+            True,
+            id="caller-metadata-does-not-shadow-resolved-list",
+        ),
+        pytest.param(
+            {
+                "litellm_params": {
+                    "metadata": {"user_id": "some-caller"},
+                    "litellm_metadata": {"guardrails": ["mcp-output-guardrail"]},
+                }
+            },
+            None,
+            True,
+            id="resolved-into-the-litellm-metadata-bucket",
+        ),
+        pytest.param(
+            {"litellm_params": {"metadata": {}}},
+            {"guardrails": ["other-guardrail"]},
+            False,
+            id="attached-elsewhere",
+        ),
+    ],
+)
+async def test_post_mcp_call_hook_runs_guardrails_attached_to_the_caller(
+    restore_callbacks, request_data, key_metadata, masked
+):
+    """A guardrail attached to the caller must mask MCP tool output without Default On.
+
+    The hook is handed the logging object's model_call_details, which keeps request metadata
+    under litellm_params, so the attached guardrail used to be skipped as unrequested. A list
+    resolved on the way in must win over auth, since it carries policy-engine guardrails, and
+    neither caller-sent top-level metadata nor function_setup splitting the bucket in two may
+    shadow it.
+    """
+    litellm.callbacks = [_KeyScopedMCPGuardrail()]
+
+    texts = await _post_mcp_call_texts(request_data, key_metadata)
+
+    assert texts == (["<MASKED>"] if masked else ["jane@example.com"])
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_masks_for_guardrail_attached_through_key_policy(restore_callbacks):
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    litellm.callbacks = [_KeyScopedMCPGuardrail(guardrail_name="pii_masker")]
+    registry = get_policy_registry()
+    registry.clear()
+    registry.add_policy("pii-policy", Policy(guardrails=PolicyGuardrails(add=["pii_masker"])))
+    try:
+        texts = await _post_mcp_call_texts({"litellm_params": {"metadata": {}}}, {"policies": ["pii-policy"]})
+    finally:
+        registry.clear()
+
+    assert texts == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_honors_key_opt_out_of_global_guardrail(restore_callbacks):
+    """A key opted out of a Default On guardrail must get raw tool output, the only per-key escape hatch."""
+    litellm.callbacks = [_RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)]
+    request_data = {
+        "litellm_params": {
+            "metadata": {"user_api_key_metadata": {"opted_out_global_guardrails": ["mcp-output-guardrail"]}}
+        }
+    }
+
+    texts = await _post_mcp_call_texts(request_data, key_metadata=None)
+
+    assert texts == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_keeps_guardrail_writes_out_of_the_logging_payload(restore_callbacks):
+    """Guardrail writes such as Presidio's pii_tokens hold original PII and must not reach the logged payload."""
+    litellm.callbacks = [_KeyScopedMCPGuardrail()]
+    request_data = {"litellm_params": {"metadata": {"guardrails": ["mcp-output-guardrail"]}}}
+
+    texts = await _post_mcp_call_texts(request_data, key_metadata=None)
+
+    assert texts == ["<MASKED>"]
+    assert request_data == {"litellm_params": {"metadata": {"guardrails": ["mcp-output-guardrail"]}}}
+
+
 class _TracebackRecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

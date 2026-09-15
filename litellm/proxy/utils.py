@@ -461,6 +461,64 @@ def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
     )
 
 
+_MCP_GUARDRAIL_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+
+
+def _merged_metadata_bucket(
+    request_data: Mapping[str, Any],
+    litellm_params: object,
+    bucket_name: str,
+) -> Mapping[str, Any] | None:
+    """Merge one metadata bucket from ``litellm_params`` with the request's own, resolved list winning."""
+    buckets: Final = tuple(
+        bucket
+        for bucket in (
+            litellm_params.get(bucket_name) if isinstance(litellm_params, Mapping) else None,
+            request_data.get(bucket_name),
+        )
+        if isinstance(bucket, Mapping)
+    )
+    if not buckets:
+        return None
+    resolved_guardrails: Final = next((bucket["guardrails"] for bucket in buckets if bucket.get("guardrails")), None)
+    return {
+        **{key: value for bucket in buckets for key, value in bucket.items()},
+        **({"guardrails": resolved_guardrails} if resolved_guardrails else {}),
+    }
+
+
+def _mcp_guardrail_request_data(
+    request_data: Mapping[str, Any],
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> Mapping[str, Any]:
+    """
+    Return ``request_data`` with the metadata buckets nested under ``litellm_params`` lifted to the top.
+
+    The MCP call sites hand this hook the request's ``Logging.model_call_details``, which nests request
+    metadata under ``litellm_params``, and ``function_setup`` keeps ``litellm_metadata`` separate from
+    ``metadata`` when a request carries both. ``should_run_guardrail`` only reads the top level, so
+    without the lift a guardrail attached by key, team or policy is invisible and only ``default_on``
+    ones run. The MCP tool call built for /v1/responses never resolves guardrails onto its metadata at
+    all, so when no bucket carries a list, fall back to resolving them from auth. Merging onto a copy
+    keeps guardrail writes, such as Presidio's ``pii_tokens`` holding the original values, out of the
+    logged payload.
+    """
+    litellm_params: Final = request_data.get("litellm_params")
+    merged: Final = {
+        bucket_name: bucket
+        for bucket_name in _MCP_GUARDRAIL_METADATA_BUCKETS
+        if (bucket := _merged_metadata_bucket(request_data, litellm_params, bucket_name)) is not None
+    }
+    data: Final = {**request_data, **merged}
+    if not any(bucket.get("guardrails") for bucket in merged.values()) and user_api_key_dict is not None:
+        add_guardrails_from_auth_metadata(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            metadata_variable_name="metadata",
+        )
+    return data
+
+
 def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
     pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
     return (
@@ -3332,13 +3390,17 @@ class ProxyLogging:
             verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
             return response
 
+        guardrail_data: Final = _mcp_guardrail_request_data(
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
             if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
                 continue
             if (
-                callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
+                callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_mcp_call)
                 is not True
             ):
                 continue
@@ -3347,9 +3409,9 @@ class ProxyLogging:
                 handler_cls().process_output_response(
                     response=response,
                     guardrail_to_apply=callback,
-                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    litellm_logging_obj=guardrail_data.get("litellm_logging_obj"),
                     user_api_key_dict=user_api_key_dict,
-                    request_data=request_data,
+                    request_data=guardrail_data,
                 ),
                 "post_mcp_call",
             )
