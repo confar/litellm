@@ -1,6 +1,7 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
+import { expectUnrestrictedDashboard, setInvitedUserPassword } from "./helpers/userOnboarding";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -41,13 +42,22 @@ async function globalSetup() {
     if (!createRes.ok() && createRes.status() !== 409) {
       throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
     }
-    const passwordRes = await api.post(`${UI_BASE_URL}${rootPath}/user/update`, {
-      headers: { Authorization: `Bearer ${masterKey}` },
-      data: { user_email: email, password },
-    });
-    if (!passwordRes.ok()) {
-      throw new Error(`Setting password for ${email} failed (${passwordRes.status()}): ${await passwordRes.text()}`);
-    }
+    const userId = createRes.ok()
+      ? (await createRes.json()).user_id
+      : await (async () => {
+          const existing = await api.get(`${UI_BASE_URL}${rootPath}/user/list`, {
+            headers: { Authorization: `Bearer ${masterKey}` },
+            params: { user_email: email },
+          });
+          expect(existing.ok(), `Find seeded user ${email}: HTTP ${existing.status()}`).toBe(true);
+          const matches = (await existing.json()).users.filter(
+            (user: { user_email: string }) => user.user_email === email,
+          );
+          expect(matches, `Exactly one seeded user for ${email}`).toHaveLength(1);
+          return matches[0].user_id;
+        })();
+    expect(typeof userId, `User ID for ${email}`).toBe("string");
+    await setInvitedUserPassword(api, userId, password);
   }
   await api.dispose();
 
@@ -63,7 +73,7 @@ async function globalSetup() {
       await page.waitForURL((url) => url.pathname.startsWith(`${rootPath}/ui`) && !url.pathname.includes("/login"), {
         timeout: 30_000,
       });
-      await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
+      await expectUnrestrictedDashboard(page);
       // Dismiss feedback popup if present
       const dismiss = page.getByText("Don't ask me again");
       if (await dismiss.isVisible({ timeout: 1_500 }).catch(() => false)) {
