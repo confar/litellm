@@ -66,10 +66,9 @@ test("an admin-set password restricts access until changed and followed by a fre
     await page.getByRole("button", { name: "Login", exact: true }).click();
     await expectUnrestrictedDashboard(page);
   } finally {
-    const deleted = await request.post(`${rootPath()}/user/delete`, {
-      headers,
-      data: { user_ids: [userId] },
-    });
-    expect(deleted.ok(), `Delete test user: HTTP ${deleted.status()}`).toBe(true);
+    const [cleanup] = await Promise.allSettled([
+      request.post(`${rootPath()}/user/delete`, { headers, data: { user_ids: [userId] } }),
+    ]);
+    expect.soft(cleanup.status === "fulfilled" && cleanup.value.ok(), "Delete test user after the password-reset journey").toBe(true);
   }
 });
