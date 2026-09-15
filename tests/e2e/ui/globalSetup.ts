@@ -31,41 +31,37 @@ async function globalSetup() {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
   }
 
-  for (const { email, password, seedApiRole } of Object.values(users)) {
-    if (!seedApiRole) {
-      continue;
-    }
-    const createRes = await api.post(`${UI_BASE_URL}${rootPath}/user/new`, {
-      headers: { Authorization: `Bearer ${masterKey}` },
-      data: { user_email: email, user_role: seedApiRole, auto_create_key: false },
-    });
-    if (!createRes.ok() && createRes.status() !== 409) {
-      throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
-    }
-    const userId = createRes.ok()
-      ? (await createRes.json()).user_id
-      : await (async () => {
-          const existing = await api.get(`${UI_BASE_URL}${rootPath}/user/list`, {
-            headers: { Authorization: `Bearer ${masterKey}` },
-            params: { user_email: email },
-          });
-          expect(existing.ok(), `Find seeded user ${email}: HTTP ${existing.status()}`).toBe(true);
-          const matches = (await existing.json()).users.filter(
-            (user: { user_email: string }) => user.user_email === email,
-          );
-          expect(matches, `Exactly one seeded user for ${email}`).toHaveLength(1);
-          return matches[0].user_id;
-        })();
-    expect(typeof userId, `User ID for ${email}`).toBe("string");
-    await setInvitedUserPassword(api, userId, password);
-  }
-  await api.dispose();
-
-  for (const role of Object.values(Role)) {
-    const { email, password } = users[role];
+  const roles = [Role.ProxyAdmin, ...Object.values(Role).filter((role) => role !== Role.ProxyAdmin)];
+  for (const role of roles) {
+    const { email, password, seedApiRole } = users[role];
     const storagePath = STORAGE_PATHS[role];
     const page = await browser.newPage();
     try {
+      if (seedApiRole) {
+        const createRes = await api.post(`${UI_BASE_URL}${rootPath}/user/new`, {
+          headers: { Authorization: `Bearer ${masterKey}` },
+          data: { user_email: email, user_role: seedApiRole, auto_create_key: false },
+        });
+        if (!createRes.ok() && createRes.status() !== 409) {
+          throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
+        }
+        const userId = createRes.ok()
+          ? (await createRes.json()).user_id
+          : await (async () => {
+              const existing = await api.get(`${UI_BASE_URL}${rootPath}/user/list`, {
+                headers: { Authorization: `Bearer ${masterKey}` },
+                params: { user_email: email },
+              });
+              expect(existing.ok(), `Find seeded user ${email}: HTTP ${existing.status()}`).toBe(true);
+              const matches = (await existing.json()).users.filter(
+                (user: { user_email: string }) => user.user_email === email,
+              );
+              expect(matches, `Exactly one seeded user for ${email}`).toHaveLength(1);
+              return matches[0].user_id;
+            })();
+        expect(typeof userId, `User ID for ${email}`).toBe("string");
+        await setInvitedUserPassword(api, userId, password);
+      }
       await page.goto(`${UI_BASE_URL}${rootPath}/ui/login`);
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
@@ -110,6 +106,7 @@ async function globalSetup() {
     }
   }
 
+  await api.dispose();
   await browser.close();
 }
 
